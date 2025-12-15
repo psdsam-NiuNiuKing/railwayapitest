@@ -209,6 +209,7 @@ async def bench_contracts_all_contracts(
     expiration_horizon_days: int = 365,
     strike_band: tuple[float, float] | None = (0.7, 1.3),
     spot_hint: float | None = None,
+    auto_spot_hint: bool = False,
     include_sample_option_tickers: bool = False,
     sample_limit: int = 10,
     max_concurrent: int = 100,
@@ -223,22 +224,43 @@ async def bench_contracts_all_contracts(
 
     exp_lte = as_of + timedelta(days=max(1, int(expiration_horizon_days)))
 
-    base_params: dict[str, Any] = {
+    base_params_template: dict[str, Any] = {
         "as_of": as_of.isoformat(),
         "expiration_date.gte": as_of.isoformat(),
         "expiration_date.lte": exp_lte.isoformat(),
         "limit": int(limit),
     }
 
-    if strike_band and spot_hint and spot_hint > 0:
-        try:
-            lo, hi = strike_band
-            base_params["strike_price.gte"] = round(float(spot_hint) * float(lo), 4)
-            base_params["strike_price.lte"] = round(float(spot_hint) * float(hi), 4)
-        except Exception:
-            pass
-
     per_ticker: dict[str, dict[str, Any]] = {}
+
+    async def _fetch_daily_close_once(
+        session: aiohttp.ClientSession,
+        ticker: str,
+    ) -> float | None:
+        url = f"{MASSIVE_REST_BASE}/v2/aggs/ticker/{ticker}/range/1/day/{as_of.isoformat()}/{as_of.isoformat()}"
+        params: dict[str, Any] = {"adjusted": "true"}
+        status, data, err, retries, dur, nbytes = await _get_json_with_retries(
+            session,
+            url,
+            headers,
+            params,
+            max_attempts=4,
+            trace=trace,
+        )
+        stats.observe(status, dur, nbytes, retries=retries)
+        if status != 200 or not data:
+            if trace:
+                LOGGER.info("daily_close hint failed ticker=%s status=%s err=%s", ticker, status, (err or "")[:200])
+            return None
+        results = data.get("results", []) or []
+        if not results:
+            return None
+        close_v = (results[0] or {}).get("c")
+        try:
+            close_f = float(close_v)
+        except Exception:
+            return None
+        return close_f if close_f > 0 else None
 
     async with await create_session(max_concurrent=max_concurrent, timeout_total_s=timeout_total_s) as session:
         async def fetch_for_ticker(ticker: str) -> None:
@@ -246,6 +268,25 @@ async def bench_contracts_all_contracts(
             sample_ots: list[str] = []
             pages = 0
             results = 0
+
+            spot_used: float | None = None
+            if spot_hint and spot_hint > 0:
+                spot_used = float(spot_hint)
+            elif auto_spot_hint:
+                # One extra request per ticker, but often reduces contracts pages by 5-50x.
+                spot_used = await _fetch_daily_close_once(session, ticker)
+
+            base_params: dict[str, Any] = dict(base_params_template)
+            if strike_band and spot_used and spot_used > 0:
+                try:
+                    lo, hi = strike_band
+                    low_v = float(spot_used) * float(lo)
+                    high_v = float(spot_used) * float(hi)
+                    if low_v > 0 and high_v > low_v:
+                        base_params["strike_price.gte"] = round(low_v, 4)
+                        base_params["strike_price.lte"] = round(high_v, 4)
+                except Exception:
+                    pass
 
             for expired_flag in ("false", "true"):
                 next_url: str | None = base_url
@@ -294,6 +335,8 @@ async def bench_contracts_all_contracts(
             per_ticker[ticker] = {
                 "contracts_unique": int(results),
                 "pages": int(pages),
+                "spot_hint_used": (round(float(spot_used), 4) if spot_used else None),
+                "strike_band": (list(strike_band) if strike_band else None),
                 **({"sample_option_tickers": sample_ots} if include_sample_option_tickers else {}),
             }
 

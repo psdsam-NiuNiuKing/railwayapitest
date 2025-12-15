@@ -122,6 +122,12 @@ class ContractsRequest(BaseModel):
     as_of: str = Field(..., description="YYYY-MM-DD", examples=["2025-11-24"])
     limit: int = Field(250, ge=10, le=1000)
     expiration_horizon_days: int = Field(365, ge=7, le=730)
+    auto_spot_hint: bool = Field(
+        True,
+        description="When true, fetches the underlying daily close and uses it to apply strike_price band filters (reduces contract pages).",
+    )
+    strike_low_mult: float = Field(0.7, ge=0.01, le=10.0)
+    strike_high_mult: float = Field(1.3, ge=0.01, le=10.0)
     include_sample_option_tickers: bool = Field(
         False,
         description="When true, returns a small sample of option tickers per underlying (useful for /bench/trades and /bench/quote_at)",
@@ -155,6 +161,8 @@ async def bench_contracts_route(req: ContractsRequest) -> dict[str, Any]:
         api_key=api_key,
         limit=req.limit,
         expiration_horizon_days=req.expiration_horizon_days,
+        auto_spot_hint=bool(req.auto_spot_hint),
+        strike_band=(float(req.strike_low_mult), float(req.strike_high_mult)),
         include_sample_option_tickers=bool(req.include_sample_option_tickers),
         sample_limit=int(req.sample_limit),
         max_concurrent=max_concurrent,
