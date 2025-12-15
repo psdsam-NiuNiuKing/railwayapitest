@@ -63,3 +63,36 @@ From Railway logs (or local terminal), please paste:
 - the full log block around a run (especially any `429` lines)
 - the JSON response from the endpoint
 - the env values you used (`MAX_CONCURRENT`, `HTTP_TIMEOUT_TOTAL`, `MASSIVE_BENCH_TRACE`)
+
+## Findings (keep for later)
+
+These are notes from initial Railway benchmarks (Dec 2025) to apply later when tuning the Railway app downloader.
+
+### Biggest bottleneck: contract discovery pagination
+
+Contract discovery via `v3/reference/options/contracts` is dominated by pagination latency, not concurrency.
+
+Recommended knobs (in order of impact):
+
+1) Increase `limit` (Massive appears to honor higher limits)
+- Example: `limit=1000` reduced SPY pages from ~29 to ~7 and total time from ~20s to ~6s.
+
+2) Avoid the extra `expired=true` pass unless you have evidence it adds needed results
+- With `expiration_date.gte=as_of`, querying `expired=true` is usually redundant.
+- Using `include_expired=false` avoids doubling page fetch work.
+
+3) Narrow the universe when appropriate
+- Example: `expiration_horizon_days=60` and strike band `0.9..1.1` reduced SPY to ~3 pages and ~1.8s.
+
+### Quotes are fast and not rate-limited (good news)
+
+`v3/quotes` with `timestamp.lte` (`limit=1`, `order=desc`) sustained high request rates with 0 observed 429s during tests (e.g. 300 requests at concurrency 250).
+
+### Trades are also fine
+
+Single-contract `v3/trades` fetches were low-latency in tests and not rate-limited.
+
+### How this maps to the Railway app
+
+- For historical runs, focus on optimizing contract discovery (paging). Use `limit=1000` and skip `expired=true` unless required.
+- For the Railway full scan UI, you may not need aggressive contract paging optimization if you’re intentionally scanning a smaller subset.
