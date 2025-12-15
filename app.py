@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from railwayapitest.massive_bench import (
+from massive_bench import (
     bench_contracts_all_contracts,
     bench_daily_close,
     bench_quote_at_timestamp,

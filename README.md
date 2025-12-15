@@ -11,7 +11,7 @@ This is intentionally small and **only** tests the REST patterns your monitor us
 ## Deploy to Railway (separate project)
 
 1. Create a new Railway project from this repo.
-2. Set **Root Directory** to `railwayapitest` (monorepo mode).
+2. Root directory should be the repo root (default).
 3. Add environment variables:
    - `MASSIVE_API_KEY` (required)
    - `MAX_CONCURRENT` (optional, start at `250`)
@@ -36,6 +36,7 @@ From repo root:
 - `pip install -r railwayapitest/requirements.txt`
 - `set MASSIVE_API_KEY=...`
 - `uvicorn railwayapitest.app:app --reload --port 8000`
+ - `uvicorn app:app --reload --port 8000`
 
 ## Example curl
 
