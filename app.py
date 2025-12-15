@@ -122,6 +122,10 @@ class ContractsRequest(BaseModel):
     as_of: str = Field(..., description="YYYY-MM-DD", examples=["2025-11-24"])
     limit: int = Field(250, ge=10, le=1000)
     expiration_horizon_days: int = Field(365, ge=7, le=730)
+    include_expired: bool = Field(
+        False,
+        description="When true, queries both expired=false and expired=true and unions results. Usually not needed when expiration_date.gte=as_of is set.",
+    )
     auto_spot_hint: bool = Field(
         True,
         description="When true, fetches the underlying daily close and uses it to apply strike_price band filters (reduces contract pages).",
@@ -161,6 +165,7 @@ async def bench_contracts_route(req: ContractsRequest) -> dict[str, Any]:
         api_key=api_key,
         limit=req.limit,
         expiration_horizon_days=req.expiration_horizon_days,
+        include_expired=bool(req.include_expired),
         auto_spot_hint=bool(req.auto_spot_hint),
         strike_band=(float(req.strike_low_mult), float(req.strike_high_mult)),
         include_sample_option_tickers=bool(req.include_sample_option_tickers),

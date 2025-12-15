@@ -209,6 +209,7 @@ async def bench_contracts_all_contracts(
     expiration_horizon_days: int = 365,
     strike_band: tuple[float, float] | None = (0.7, 1.3),
     spot_hint: float | None = None,
+    include_expired: bool = False,
     auto_spot_hint: bool = False,
     include_sample_option_tickers: bool = False,
     sample_limit: int = 10,
@@ -288,7 +289,8 @@ async def bench_contracts_all_contracts(
                 except Exception:
                     pass
 
-            for expired_flag in ("false", "true"):
+            expired_flags = ("false", "true") if include_expired else ("false",)
+            for expired_flag in expired_flags:
                 next_url: str | None = base_url
                 current_params: dict[str, Any] | None = dict(base_params)
                 current_params["underlying_ticker"] = ticker
