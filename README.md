@@ -22,6 +22,7 @@ This is intentionally small and **only** tests the REST patterns your monitor us
 
 The service exposes:
 - `GET /health`
+- `GET /docs` (interactive Swagger UI)
 - `POST /bench/contracts`
 - `POST /bench/trades`
 - `POST /bench/quote_at`
@@ -42,7 +43,7 @@ From repo root:
 
 ### Contracts
 
-`curl -X POST http://localhost:8000/bench/contracts -H "Content-Type: application/json" -d "{\"tickers\":[\"SPY\",\"QQQ\"],\"as_of\":\"2025-11-24\"}"`
+`curl -X POST http://localhost:8000/bench/contracts -H "Content-Type: application/json" -d "{\"tickers\":[\"SPY\",\"QQQ\"],\"as_of\":\"2025-11-24\",\"include_sample_option_tickers\":true,\"sample_limit\":5}"`
 
 ### Trades (first 2 pages per contract)
 

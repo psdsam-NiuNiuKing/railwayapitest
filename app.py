@@ -122,6 +122,11 @@ class ContractsRequest(BaseModel):
     as_of: str = Field(..., description="YYYY-MM-DD", examples=["2025-11-24"])
     limit: int = Field(250, ge=10, le=1000)
     expiration_horizon_days: int = Field(365, ge=7, le=730)
+    include_sample_option_tickers: bool = Field(
+        False,
+        description="When true, returns a small sample of option tickers per underlying (useful for /bench/trades and /bench/quote_at)",
+    )
+    sample_limit: int = Field(10, ge=1, le=50)
     max_concurrent: int | None = Field(None, ge=1, le=2000)
     timeout_total_s: int | None = Field(None, ge=10, le=900)
 
@@ -150,6 +155,8 @@ async def bench_contracts_route(req: ContractsRequest) -> dict[str, Any]:
         api_key=api_key,
         limit=req.limit,
         expiration_horizon_days=req.expiration_horizon_days,
+        include_sample_option_tickers=bool(req.include_sample_option_tickers),
+        sample_limit=int(req.sample_limit),
         max_concurrent=max_concurrent,
         timeout_total_s=timeout_total_s,
     )

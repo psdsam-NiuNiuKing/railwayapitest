@@ -209,6 +209,8 @@ async def bench_contracts_all_contracts(
     expiration_horizon_days: int = 365,
     strike_band: tuple[float, float] | None = (0.7, 1.3),
     spot_hint: float | None = None,
+    include_sample_option_tickers: bool = False,
+    sample_limit: int = 10,
     max_concurrent: int = 100,
     timeout_total_s: int = 120,
 ) -> dict[str, Any]:
@@ -241,6 +243,7 @@ async def bench_contracts_all_contracts(
     async with await create_session(max_concurrent=max_concurrent, timeout_total_s=timeout_total_s) as session:
         async def fetch_for_ticker(ticker: str) -> None:
             by_ot: dict[str, Any] = {}
+            sample_ots: list[str] = []
             pages = 0
             results = 0
 
@@ -278,7 +281,11 @@ async def bench_contracts_all_contracts(
                         details = item.get("details") or {}
                         ot = details.get("ticker") or item.get("ticker") or item.get("option_ticker")
                         if ot:
-                            by_ot.setdefault(str(ot), 1)
+                            ot_s = str(ot)
+                            by_ot.setdefault(ot_s, 1)
+                            if include_sample_option_tickers and len(sample_ots) < int(sample_limit):
+                                if ot_s not in sample_ots:
+                                    sample_ots.append(ot_s)
                     results = len(by_ot)
 
                     next_url = data.get("next_url")
@@ -287,6 +294,7 @@ async def bench_contracts_all_contracts(
             per_ticker[ticker] = {
                 "contracts_unique": int(results),
                 "pages": int(pages),
+                **({"sample_option_tickers": sample_ots} if include_sample_option_tickers else {}),
             }
 
         started = time.time()
