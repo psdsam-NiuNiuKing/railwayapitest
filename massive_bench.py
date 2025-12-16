@@ -473,12 +473,17 @@ async def bench_snapshot_options(
     trace = _env_bool("MASSIVE_BENCH_TRACE", False)
     headers = {"Authorization": f"Bearer {api_key}"}
     base_url = f"{MASSIVE_REST_BASE}/v3/snapshot/options/{ticker}"
-    first_params: dict[str, Any] = {"as_of": as_of.isoformat(), "limit": int(limit)}
+    # Match local app behavior: snapshot/options is used for the current day and
+    # is called without an as_of/date parameter.
+    first_params: dict[str, Any] = {"limit": int(limit)}
 
     stats = RequestStats()
 
     async with await create_session(max_concurrent=max_concurrent, timeout_total_s=timeout_total_s) as session:
         started = time.time()
+
+        last_status: int | None = None
+        last_error: str | None = None
 
         next_url: str | None = base_url
         current_params: dict[str, Any] | None = dict(first_params)
@@ -496,6 +501,8 @@ async def bench_snapshot_options(
             )
             stats.observe(status, dur, nbytes, retries=retries)
             if status != 200 or not data:
+                last_status = status
+                last_error = err
                 if trace:
                     LOGGER.info("snapshot/options failed ticker=%s status=%s err=%s", ticker, status, (err or "")[:200])
                 break
@@ -521,6 +528,8 @@ async def bench_snapshot_options(
             "pages": int(pages),
             "contracts": int(contracts),
             "elapsed_s": elapsed,
+            "last_status": last_status,
+            "last_error": (last_error[:800] if isinstance(last_error, str) else last_error),
         }
     )
     return out

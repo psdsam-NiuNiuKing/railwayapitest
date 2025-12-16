@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import asdict
 from datetime import date, datetime
 from typing import Any
 
@@ -9,7 +10,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from massive_bench import (
+from .massive_bench import (
     bench_contracts_all_contracts,
     bench_daily_close,
     bench_quote_at_timestamp,
@@ -17,6 +18,9 @@ from massive_bench import (
     bench_snapshot_options,
     bench_ws_trades,
 )
+
+from .config import config
+from .historical_downloader import download_day_async
 
 load_dotenv()
 
@@ -67,9 +71,23 @@ def root() -> dict[str, Any]:
             "POST /bench/contracts",
             "POST /bench/trades",
             "POST /bench/quote_at",
+            "POST /run/download_day",
         ],
         "notes": {
-            "set_env": ["MASSIVE_API_KEY", "MAX_CONCURRENT", "HTTP_TIMEOUT_TOTAL", "LOG_LEVEL"],
+            "set_env": [
+                "MASSIVE_API_KEY",
+                "MAX_CONCURRENT",
+                "MAX_TICKERS_CONCURRENT",
+                "STORE_TRADES",
+                "CONTRACTS_LIMIT",
+                "SNAPSHOT_CONTRACTS_LIMIT",
+                "EXPIRATION_HORIZON_DAYS",
+                "STRIKE_LOW_MULT",
+                "STRIKE_HIGH_MULT",
+                "INCLUDE_EXPIRED_CONTRACTS",
+                "HTTP_TIMEOUT_TOTAL",
+                "LOG_LEVEL",
+            ],
             "trace": "Set MASSIVE_BENCH_TRACE=true to log per-request lines (can be noisy).",
         },
     }
@@ -84,6 +102,121 @@ def health() -> dict[str, Any]:
         "timeout_total_default": _get_env_int("HTTP_TIMEOUT_TOTAL", 60),
         "log_level": LOG_LEVEL,
     }
+
+
+class RunDownloadDayRequest(BaseModel):
+    session_date: str = Field(..., description="YYYY-MM-DD", examples=["2025-11-24"])
+    tickers: list[str] = Field(..., examples=[["SPY", "QQQ", "AAPL"]])
+    max_concurrent: int | None = Field(None, ge=1, le=2000)
+    max_tickers_concurrent: int | None = Field(None, ge=1, le=250)
+    store_trades: bool | None = Field(
+        None,
+        description="When true, writes trades.parquet alongside summaries.parquet",
+    )
+    min_contracts_large: int | None = Field(None, ge=1, le=1_000_000)
+    min_notional_large: float | None = Field(None, ge=0)
+    window_ms: int = Field(2000, ge=50, le=60_000)
+    contract_source: str = Field(
+        "all-contracts",
+        description='"all-contracts" (downloader) or "snapshot" (scan-style; current-day only).',
+        examples=["all-contracts"],
+    )
+
+
+@app.post("/run/download_day")
+async def run_download_day(req: RunDownloadDayRequest) -> dict[str, Any]:
+    _ = _require_api_key()
+
+    session_date = _to_date(req.session_date)
+    tickers = [t.strip().upper() for t in (req.tickers or []) if t and t.strip()]
+    if not tickers:
+        raise HTTPException(status_code=400, detail="tickers is empty")
+
+    max_concurrent = int(req.max_concurrent or getattr(config, "max_concurrent", 100) or 100)
+    min_contracts_large = int(req.min_contracts_large or getattr(config, "large_order_size_threshold", 1000) or 1000)
+    min_notional_large = float(req.min_notional_large or getattr(config, "large_order_notional_threshold", 10000) or 10000)
+    window_ms = int(req.window_ms or 2000)
+
+    contract_source = str(req.contract_source or "all-contracts").strip().lower()
+    if contract_source not in {"all-contracts", "snapshot"}:
+        raise HTTPException(status_code=400, detail="contract_source must be 'all-contracts' or 'snapshot'")
+
+    # Allow per-run override of a few config knobs (restores after run).
+    restore: dict[str, Any] = {}
+    try:
+        if req.max_tickers_concurrent is not None:
+            restore["max_tickers_concurrent"] = getattr(config, "max_tickers_concurrent", None)
+            setattr(config, "max_tickers_concurrent", int(req.max_tickers_concurrent))
+        if req.store_trades is not None:
+            restore["store_trades"] = getattr(config, "store_trades", None)
+            setattr(config, "store_trades", bool(req.store_trades))
+
+        LOGGER.info(
+            "run download_day date=%s tickers=%s max_concurrent=%s max_tickers_concurrent=%s contract_source=%s store_trades=%s",
+            session_date.isoformat(),
+            len(tickers),
+            max_concurrent,
+            getattr(config, "max_tickers_concurrent", None),
+            contract_source,
+            getattr(config, "store_trades", None),
+        )
+
+        result = await download_day_async(
+            session_date=session_date,
+            tickers=tickers,
+            max_concurrent=max_concurrent,
+            min_contracts_large=min_contracts_large,
+            min_notional_large=min_notional_large,
+            window_ms=window_ms,
+            progress_callback=None,
+            contract_source=contract_source,  # type: ignore[arg-type]
+        )
+
+        out_dir = getattr(config, "intraday_flow_root", None)
+        out_path = None
+        try:
+            from pathlib import Path
+
+            out_path = str(Path(out_dir) / session_date.strftime("%Y-%m-%d")) if out_dir else None
+        except Exception:
+            out_path = None
+
+        artifacts = {}
+        if out_path:
+            try:
+                from pathlib import Path
+
+                p = Path(out_path)
+                artifacts = {
+                    "summaries_parquet": str(p / "summaries.parquet"),
+                    "large_orders_json": str(p / "large_orders.json"),
+                    "scan_metadata_json": str(p / "scan_metadata.json"),
+                    "trades_parquet": str(p / "trades.parquet"),
+                    "exists": {
+                        "summaries.parquet": (p / "summaries.parquet").exists(),
+                        "large_orders.json": (p / "large_orders.json").exists(),
+                        "scan_metadata.json": (p / "scan_metadata.json").exists(),
+                        "trades.parquet": (p / "trades.parquet").exists(),
+                    },
+                }
+            except Exception:
+                artifacts = {}
+
+        payload = asdict(result)
+        payload["session_date"] = result.session_date.isoformat()
+
+        return {
+            "ok": True,
+            "result": payload,
+            "output_dir": out_path,
+            "artifacts": artifacts,
+        }
+    finally:
+        for k, v in restore.items():
+            try:
+                setattr(config, k, v)
+            except Exception:
+                pass
 
 
 class DailyCloseRequest(BaseModel):

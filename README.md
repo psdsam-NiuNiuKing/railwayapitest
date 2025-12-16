@@ -8,13 +8,22 @@ This is intentionally small and **only** tests the REST patterns your monitor us
 - `GET /v3/trades/{option_ticker}` (trades)
 - `GET /v3/quotes/{option_ticker}?timestamp.lte=...&limit=1` (quote at timestamp)
 
+It also exposes a **real-pipeline runner** endpoint that uses the exact same downloader
+as the Railway Streamlit app and writes the same artifacts under `/data/intradayoptionflow/YYYY-MM-DD/`.
+
 ## Deploy to Railway (separate project)
 
 1. Create a new Railway project from this repo.
 2. Root directory should be the repo root (default).
 3. Add environment variables:
    - `MASSIVE_API_KEY` (required)
-   - `MAX_CONCURRENT` (optional, start at `250`)
+   - `MAX_CONCURRENT` (optional, start at `100`)
+   - `MAX_TICKERS_CONCURRENT` (optional, start at `5`)
+   - `STORE_TRADES` (optional: `true` to also write `trades.parquet`)
+   - `CONTRACTS_LIMIT` (optional, start at `1000`)
+   - `EXPIRATION_HORIZON_DAYS` (optional, start at `365`)
+   - `STRIKE_LOW_MULT` / `STRIKE_HIGH_MULT` (optional, start at `0.7` / `1.3`)
+   - `INCLUDE_EXPIRED_CONTRACTS` (optional, default `false`)
    - `HTTP_TIMEOUT_TOTAL` (optional, start at `60`)
    - `LOG_LEVEL` (optional: `INFO` or `DEBUG`)
    - `MASSIVE_BENCH_TRACE` (optional: `true` to log per-request lines)
@@ -27,6 +36,7 @@ The service exposes:
 - `POST /bench/trades`
 - `POST /bench/quote_at`
 - `POST /bench/daily_close`
+- `POST /run/download_day` (real pipeline: writes `/data/intradayoptionflow/YYYY-MM-DD/`)
 
 ## Local run
 
@@ -56,6 +66,10 @@ From repo root:
 ### Daily close (repeated)
 
 `curl -X POST http://localhost:8000/bench/daily_close -H "Content-Type: application/json" -d "{\"ticker\":\"SPY\",\"date\":\"2025-11-24\",\"requests\":50}"`
+
+### Real pipeline run (writes parquet/json artifacts)
+
+`curl -X POST http://localhost:8000/run/download_day -H "Content-Type: application/json" -d "{\"session_date\":\"2025-11-24\",\"tickers\":[\"SPY\",\"QQQ\"],\"max_concurrent\":100,\"max_tickers_concurrent\":5,\"contract_source\":\"all-contracts\"}"`
 
 ## What to send back
 
