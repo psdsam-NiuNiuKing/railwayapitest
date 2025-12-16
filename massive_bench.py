@@ -236,6 +236,83 @@ async def bench_contracts_all_contracts(
 
     per_ticker: dict[str, dict[str, Any]] = {}
 
+    def _pick_sample_option_tickers(
+        candidates: list[tuple[str, float | None, date | None]],
+        *,
+        spot: float | None,
+        as_of_d: date,
+        n: int,
+    ) -> list[str]:
+        if n <= 0:
+            return []
+        if not candidates:
+            return []
+
+        # If we don't have a spot hint, just return the first unique tickers.
+        if not spot or spot <= 0:
+            out: list[str] = []
+            seen: set[str] = set()
+            for ot, _strike, _exp in candidates:
+                if ot in seen:
+                    continue
+                seen.add(ot)
+                out.append(ot)
+                if len(out) >= n:
+                    break
+            return out
+
+        buckets: list[tuple[int, int]] = [(0, 7), (8, 30), (31, 90), (91, 3650)]
+        per_bucket: list[list[tuple[float, str]]] = [[] for _ in buckets]
+
+        for ot, strike, exp in candidates:
+            if strike is None or exp is None:
+                continue
+            dte = (exp - as_of_d).days
+            if dte < 0:
+                continue
+            dist = abs(float(strike) - float(spot)) / float(spot)
+            dte_penalty = min(3650.0, float(dte)) / 3650.0
+            score = dist + 0.15 * dte_penalty
+            for i, (lo, hi) in enumerate(buckets):
+                if lo <= dte <= hi:
+                    per_bucket[i].append((score, ot))
+                    break
+
+        if not any(per_bucket):
+            return [c[0] for c in candidates[:n]]
+
+        for b in per_bucket:
+            b.sort(key=lambda x: x[0])
+
+        out: list[str] = []
+        seen: set[str] = set()
+        while len(out) < n:
+            progressed = False
+            for b in per_bucket:
+                if not b:
+                    continue
+                _score, ot = b.pop(0)
+                if ot in seen:
+                    continue
+                seen.add(ot)
+                out.append(ot)
+                progressed = True
+                if len(out) >= n:
+                    break
+            if not progressed:
+                break
+
+        if len(out) < n:
+            for ot, _strike, _exp in candidates:
+                if ot in seen:
+                    continue
+                seen.add(ot)
+                out.append(ot)
+                if len(out) >= n:
+                    break
+
+        return out
+
     async def _fetch_daily_close_once(
         session: aiohttp.ClientSession,
         ticker: str,
@@ -268,7 +345,7 @@ async def bench_contracts_all_contracts(
     async with await create_session(max_concurrent=max_concurrent, timeout_total_s=timeout_total_s) as session:
         async def fetch_for_ticker(ticker: str) -> None:
             by_ot: dict[str, Any] = {}
-            sample_ots: list[str] = []
+            candidates: list[tuple[str, float | None, date | None]] = []
             pages = 0
             results = 0
 
@@ -328,13 +405,34 @@ async def bench_contracts_all_contracts(
                         if ot:
                             ot_s = str(ot)
                             by_ot.setdefault(ot_s, 1)
-                            if include_sample_option_tickers and len(sample_ots) < int(sample_limit):
-                                if ot_s not in sample_ots:
-                                    sample_ots.append(ot_s)
+                            if include_sample_option_tickers:
+                                strike = details.get("strike_price")
+                                exp_raw = details.get("expiration_date")
+                                exp_d: date | None = None
+                                try:
+                                    if exp_raw:
+                                        exp_d = _to_date(str(exp_raw))
+                                except Exception:
+                                    exp_d = None
+                                strike_f: float | None
+                                try:
+                                    strike_f = float(strike) if strike is not None else None
+                                except Exception:
+                                    strike_f = None
+                                candidates.append((ot_s, strike_f, exp_d))
                     results = len(by_ot)
 
                     next_url = data.get("next_url")
                     current_params = None
+
+            sample_ots: list[str] = []
+            if include_sample_option_tickers:
+                sample_ots = _pick_sample_option_tickers(
+                    candidates,
+                    spot=(float(spot_used) if spot_used else None),
+                    as_of_d=as_of,
+                    n=int(sample_limit),
+                )
 
             per_ticker[ticker] = {
                 "contracts_unique": int(results),
