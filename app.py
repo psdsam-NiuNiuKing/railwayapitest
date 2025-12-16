@@ -72,6 +72,7 @@ def root() -> dict[str, Any]:
             "POST /bench/trades",
             "POST /bench/quote_at",
             "POST /run/download_day",
+            "POST /run/scan_day",
         ],
         "notes": {
             "set_env": [
@@ -120,6 +121,14 @@ class RunDownloadDayRequest(BaseModel):
         "all-contracts",
         description='"all-contracts" (downloader) or "snapshot" (scan-style; current-day only).',
         examples=["all-contracts"],
+    )
+
+
+class RunScanDayRequest(RunDownloadDayRequest):
+    contract_source: str = Field(
+        "snapshot",
+        description='Scan-style run (defaults to "snapshot" for current-day scans).',
+        examples=["snapshot"],
     )
 
 
@@ -217,6 +226,16 @@ async def run_download_day(req: RunDownloadDayRequest) -> dict[str, Any]:
                 setattr(config, k, v)
             except Exception:
                 pass
+
+
+@app.post("/run/scan_day")
+async def run_scan_day(req: RunScanDayRequest) -> dict[str, Any]:
+    """Convenience wrapper for scan-style runs.
+
+    Uses the same pipeline as /run/download_day but defaults to snapshot contract sourcing.
+    """
+    # Reuse the same implementation.
+    return await run_download_day(req)  # type: ignore[arg-type]
 
 
 class DailyCloseRequest(BaseModel):
