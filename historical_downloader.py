@@ -26,7 +26,7 @@ from typing import Any, Callable, Iterable, Literal
 import aiohttp
 import pandas as pd
 
-from .config import config
+from config import config
 
 LOGGER = logging.getLogger(__name__)
 

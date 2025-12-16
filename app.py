@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from .massive_bench import (
+from massive_bench import (
     bench_contracts_all_contracts,
     bench_daily_close,
     bench_quote_at_timestamp,
@@ -19,8 +19,8 @@ from .massive_bench import (
     bench_ws_trades,
 )
 
-from .config import config
-from .historical_downloader import download_day_async
+from config import config
+from historical_downloader import download_day_async
 
 load_dotenv()
 
