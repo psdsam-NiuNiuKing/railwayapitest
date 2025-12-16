@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -9,6 +10,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 import aiohttp
+import websocket
 
 LOGGER = logging.getLogger(__name__)
 
@@ -205,7 +207,7 @@ async def bench_contracts_all_contracts(
     as_of: date,
     api_key: str,
     *,
-    limit: int = 250,
+    limit: int = 1000,
     expiration_horizon_days: int = 365,
     strike_band: tuple[float, float] | None = (0.7, 1.3),
     spot_hint: float | None = None,
@@ -357,6 +359,165 @@ async def bench_contracts_all_contracts(
         }
     )
     return out
+
+
+async def bench_snapshot_options(
+    ticker: str,
+    as_of: date,
+    api_key: str,
+    *,
+    limit: int = 1000,
+    max_pages: int | None = None,
+    max_concurrent: int = 50,
+    timeout_total_s: int = 120,
+) -> dict[str, Any]:
+    """Benchmark /v3/snapshot/options/{ticker} pagination cost."""
+    trace = _env_bool("MASSIVE_BENCH_TRACE", False)
+    headers = {"Authorization": f"Bearer {api_key}"}
+    base_url = f"{MASSIVE_REST_BASE}/v3/snapshot/options/{ticker}"
+    first_params: dict[str, Any] = {"as_of": as_of.isoformat(), "limit": int(limit)}
+
+    stats = RequestStats()
+
+    async with await create_session(max_concurrent=max_concurrent, timeout_total_s=timeout_total_s) as session:
+        started = time.time()
+
+        next_url: str | None = base_url
+        current_params: dict[str, Any] | None = dict(first_params)
+        contracts = 0
+        pages = 0
+
+        while next_url:
+            status, data, err, retries, dur, nbytes = await _get_json_with_retries(
+                session,
+                str(next_url),
+                headers,
+                current_params,
+                max_attempts=4,
+                trace=trace,
+            )
+            stats.observe(status, dur, nbytes, retries=retries)
+            if status != 200 or not data:
+                if trace:
+                    LOGGER.info("snapshot/options failed ticker=%s status=%s err=%s", ticker, status, (err or "")[:200])
+                break
+
+            pages += 1
+            contracts += len(data.get("results", []) or [])
+
+            if max_pages is not None and pages >= int(max_pages):
+                break
+
+            next_url = data.get("next_url")
+            current_params = None
+
+        elapsed = time.time() - started
+
+    out = stats.summary()
+    out.update(
+        {
+            "endpoint": "v3/snapshot/options/{ticker}",
+            "ticker": ticker,
+            "as_of": as_of.isoformat(),
+            "limit": int(limit),
+            "pages": int(pages),
+            "contracts": int(contracts),
+            "elapsed_s": elapsed,
+        }
+    )
+    return out
+
+
+def bench_ws_trades(
+    api_key: str,
+    *,
+    websocket_url: str = "wss://socket.massive.com/options",
+    subscribe_params: str = "T.*",
+    duration_s: float = 5.0,
+    max_messages: int = 5000,
+) -> dict[str, Any]:
+    """Benchmark WebSocket auth+subscribe throughput (messages observed)."""
+    started = time.time()
+    messages = 0
+    trade_events = 0
+    status_events = 0
+    errors: list[str] = []
+
+    def on_open(ws: websocket.WebSocketApp) -> None:
+        try:
+            ws.send(json.dumps({"action": "auth", "params": api_key}))
+        except Exception as e:
+            errors.append(f"on_open auth failed: {e}")
+
+    def on_message(ws: websocket.WebSocketApp, message: str) -> None:
+        nonlocal messages, trade_events, status_events
+        messages += 1
+
+        try:
+            data = json.loads(message)
+        except Exception:
+            data = None
+
+        def handle_one(m: Any) -> None:
+            nonlocal trade_events, status_events
+            if not isinstance(m, dict):
+                return
+            ev = m.get("ev")
+            if ev == "status":
+                status_events += 1
+                if m.get("status") == "auth_success":
+                    try:
+                        ws.send(json.dumps({"action": "subscribe", "params": subscribe_params}))
+                    except Exception as e:
+                        errors.append(f"subscribe failed: {e}")
+            elif ev == "T":
+                trade_events += 1
+
+        if isinstance(data, list):
+            for m in data:
+                handle_one(m)
+        else:
+            handle_one(data)
+
+        if messages >= int(max_messages) or (time.time() - started) >= float(duration_s):
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+    def on_error(ws: websocket.WebSocketApp, error: Any) -> None:
+        errors.append(str(error)[:300])
+
+    def on_close(ws: websocket.WebSocketApp, close_status_code: Any, close_msg: Any) -> None:
+        _ = close_status_code
+        _ = close_msg
+
+    ws = websocket.WebSocketApp(
+        websocket_url,
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close,
+    )
+    ws.run_forever(ping_interval=30, ping_timeout=10)
+
+    elapsed = time.time() - started
+    mps = messages / elapsed if elapsed > 0 else 0.0
+    tps = trade_events / elapsed if elapsed > 0 else 0.0
+
+    return {
+        "endpoint": "ws/options",
+        "websocket_url": websocket_url,
+        "subscribe": subscribe_params,
+        "duration_s": float(duration_s),
+        "elapsed_s": float(elapsed),
+        "messages": int(messages),
+        "trade_events": int(trade_events),
+        "status_events": int(status_events),
+        "messages_per_s": float(mps),
+        "trade_events_per_s": float(tps),
+        "errors": errors,
+    }
 
 
 async def bench_trades(

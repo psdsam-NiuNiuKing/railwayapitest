@@ -14,6 +14,8 @@ from massive_bench import (
     bench_daily_close,
     bench_quote_at_timestamp,
     bench_trades,
+    bench_snapshot_options,
+    bench_ws_trades,
 )
 
 load_dotenv()
@@ -172,6 +174,42 @@ async def bench_contracts_route(req: ContractsRequest) -> dict[str, Any]:
         sample_limit=int(req.sample_limit),
         max_concurrent=max_concurrent,
         timeout_total_s=timeout_total_s,
+    )
+
+@app.get("/bench/snapshot")
+async def bench_snapshot(
+    ticker: str = Query("SPY"),
+    as_of: str = Query(date.today().isoformat()),
+    limit: int = Query(1000, ge=1, le=1000),
+    max_pages: int | None = Query(None, ge=1, le=500),
+    max_concurrent: int = Query(50, ge=1, le=2000),
+    timeout_total_s: int = Query(120, ge=10, le=600),
+):
+    api_key = _require_api_key()
+    return await bench_snapshot_options(
+        ticker=ticker.strip().upper(),
+        as_of=_to_date(as_of),
+        api_key=api_key,
+        limit=limit,
+        max_pages=max_pages,
+        max_concurrent=max_concurrent,
+        timeout_total_s=timeout_total_s,
+    )
+
+@app.get("/bench/ws")
+def bench_ws(
+    duration_s: float = Query(5.0, ge=0.5, le=30.0),
+    max_messages: int = Query(5000, ge=1, le=500000),
+    websocket_url: str = Query("wss://socket.massive.com/options"),
+    subscribe: str = Query("T.*"),
+):
+    api_key = _require_api_key()
+    return bench_ws_trades(
+        api_key=api_key,
+        websocket_url=websocket_url,
+        subscribe_params=subscribe,
+        duration_s=duration_s,
+        max_messages=max_messages,
     )
 
 
