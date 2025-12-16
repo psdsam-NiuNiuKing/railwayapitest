@@ -6,7 +6,7 @@ from datetime import date, datetime
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from massive_bench import (
@@ -175,6 +175,7 @@ async def bench_contracts_route(req: ContractsRequest) -> dict[str, Any]:
         max_concurrent=max_concurrent,
         timeout_total_s=timeout_total_s,
     )
+
 
 @app.get("/bench/snapshot")
 async def bench_snapshot(
